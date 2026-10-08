@@ -111,8 +111,9 @@ queue at its own pace and prints per-second statistics.
 - Average latency is dominated by the logger's polling interval, not the queue.
 - The 5.4 ms spike in second 2 is the OS preempting the logger thread. The
   256-slot buffer (~256 ms at 1 kHz) absorbed it with **zero lost samples**.
-- Shrinking the buffer to 8 slots and slowing the logger to 20 ms makes samples
-  drop, while the sensor loop keeps running at exactly 1 kHz.
+- With an 8-slot buffer and a logger polling every 20 ms, the logger receives
+  ~400 samples/s and ~600/s are dropped, but **received + lost stays at ~1000
+  every second**: the sensor loop never slows down.
 
 ```bash
 ./build-release/imu_demo
@@ -127,7 +128,9 @@ queue at its own pace and prints per-second statistics.
   exactly once and in order.
 - **ThreadSanitizer:** the whole suite runs clean under TSan. As a sanity check,
   weakening the producer's `head` store to `relaxed` makes TSan report a data
-  race on the buffer slot, confirming the release/acquire pair is load-bearing.
+  race between the slot write in `try_push` and the slot read in `try_pop`,
+  **even though the stress test itself still passes** on x86. Tests alone
+  would not have caught this; TSan checks against the C++ memory model.
 
 ## Build & test
 
@@ -149,6 +152,15 @@ ctest --test-dir build-tsan --output-on-failure
 
 > On WSL2 / recent kernels, TSan may abort with *"unexpected memory mapping"*.
 > Run `sudo sysctl vm.mmap_rnd_bits=28` and retry.
+
+Benchmark and demo (Release build):
+
+```bash
+cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build-release
+./build-release/bench_vs_mutex
+./build-release/imu_demo
+```
 
 ## Roadmap
 
