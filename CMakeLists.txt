@@ -37,3 +37,6 @@ target_compile_options(test_ring_buffer PRIVATE
 
 include(GoogleTest)
 gtest_discover_tests(test_ring_buffer)
+
+add_executable(bench_vs_mutex bench/bench_vs_mutex.cpp)
+target_link_libraries(bench_vs_mutex PRIVATE spsc Threads::Threads)

@@ -73,6 +73,27 @@ or CPU may make the new `head` visible before the data it guards. On x86
 passes — but on ARM it can read garbage, and the compiler is free to reorder
 on any architecture. ThreadSanitizer flags this immediately (see below).
 
+
+## Benchmark
+
+One producer and one consumer pass 10M `uint64_t` values through a 1024-slot
+queue; both sides busy-wait when full/empty. Median of 5 runs, Release build.
+
+| Queue | Median (Mops/s) | Min | Max | Speedup |
+|---|---:|---:|---:|---:|
+| `std::mutex` + `std::queue` (bounded) | 4.5 | 4.4 | 4.7 | 1.00× |
+| `spsc::RingBuffer` | 42.7 | 35.1 | 70.2 | **9.4×** |
+
+*Intel Core i9-13900H (6P + 8E cores, 20 threads), GCC 15.2, Ubuntu on WSL2.*
+
+**Reading the numbers.** The mutex queue is stable because lock contention
+dominates regardless of where threads run. The lock-free queue is bounded by
+cache-line transfer between cores, so its throughput depends on scheduling:
+two hyperthreads of one P-core share L1/L2 (fastest), while a P-core/E-core
+pair goes through a slower cache level. `head` and `tail` currently share a
+cache line (false sharing). Separating them is the next optimization.
+
+
 ## Testing
 
 - **Unit tests:** empty/full, FIFO order, wrap-around, full-after-wrap.
@@ -110,7 +131,7 @@ ctest --test-dir build-tsan --output-on-failure
 - [x] Single-threaded ring buffer with tests (empty/full, FIFO, wrap-around)
 - [x] Atomic indices with acquire/release ordering
 - [x] Two-thread stress test under ThreadSanitizer
-- [ ] Benchmark vs. `std::mutex` + `std::queue`
+- [x] Benchmark vs. `std::mutex` + `std::queue`
 - [ ] 1 kHz IMU producer/consumer demo
 - [ ] CI: GCC + Clang, TSan job
 
