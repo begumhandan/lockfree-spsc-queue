@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 
 namespace spsc {
@@ -15,34 +16,52 @@ class RingBuffer {
 public:
     static constexpr std::size_t capacity() noexcept { return N; }
 
-    // Sadece üretici çağırır.
+    // Sadece üretici thread çağırır.
     bool try_push(const T& value) {
-        if (head_ - tail_ == N) {
-            return false;                    // dolu
+        // Kendi index'im: sadece ben yazıyorum, senkronizasyon gerekmez.
+        const std::size_t head = head_.load(std::memory_order_relaxed);
+        // Tüketicinin index'i: acquire, çünkü tüketicinin o slotu okumayı
+        // BİTİRDİĞİNİ görmeden üzerine yazmamalıyım.
+        const std::size_t tail = tail_.load(std::memory_order_acquire);
+
+        if (head - tail == N) {
+            return false;  // dolu
         }
-        buffer_[head_ & kMask] = value;
-        ++head_;
+
+        buffer_[head & kMask] = value;
+        // release: yukarıdaki veri yazımı, yeni head değerinden ÖNCE görünür olur.
+        head_.store(head + 1, std::memory_order_release);
         return true;
     }
 
-    // Sadece tüketici çağırır.
+    // Sadece tüketici thread çağırır.
     bool try_pop(T& out) {
-        if (head_ == tail_) {
-            return false;                    // boş
+        const std::size_t tail = tail_.load(std::memory_order_relaxed);
+        // acquire: üreticinin release ile yayınladığı head'i gördüysem,
+        // o slottaki veriyi de eksiksiz görürüm.
+        const std::size_t head = head_.load(std::memory_order_acquire);
+
+        if (head == tail) {
+            return false;  // boş
         }
-        out = buffer_[tail_ & kMask];
-        ++tail_;
+
+        out = buffer_[tail & kMask];
+        // release: okumam bitti, slotu üreticiye geri veriyorum.
+        tail_.store(tail + 1, std::memory_order_release);
         return true;
     }
 
-    bool empty() const noexcept { return head_ == tail_; }
-    std::size_t size() const noexcept { return head_ - tail_; }
+    // Eşzamanlı kullanımda sadece anlık bir tahmindir; değer hemen eskiyebilir.
+    std::size_t size() const noexcept {
+        return head_.load(std::memory_order_acquire) -
+               tail_.load(std::memory_order_acquire);
+    }
+    bool empty() const noexcept { return size() == 0; }
 
 private:
     std::array<T, N> buffer_{};
-    // Index'ler hiç sarılmaz, sürekli artar; diziye erişirken maskelenir.
-    std::size_t head_ = 0;  // sonraki yazma konumu: SADECE üretici yazar
-    std::size_t tail_ = 0;  // sonraki okuma konumu: SADECE tüketici yazar
+    std::atomic<std::size_t> head_{0};  // SADECE üretici yazar
+    std::atomic<std::size_t> tail_{0};  // SADECE tüketici yazar
 };
 
-}  // namespace spsc
+}  
