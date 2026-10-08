@@ -40,3 +40,6 @@ gtest_discover_tests(test_ring_buffer)
 
 add_executable(bench_vs_mutex bench/bench_vs_mutex.cpp)
 target_link_libraries(bench_vs_mutex PRIVATE spsc Threads::Threads)
+
+add_executable(imu_demo examples/imu_demo.cpp)
+target_link_libraries(imu_demo PRIVATE spsc Threads::Threads)
