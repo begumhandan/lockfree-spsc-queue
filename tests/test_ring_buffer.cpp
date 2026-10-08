@@ -1,5 +1,8 @@
+#include <cstdint>
+#include <thread>
 #include <gtest/gtest.h>
 #include <spsc/ring_buffer.hpp>
+
 
 using spsc::RingBuffer;
 
@@ -58,4 +61,51 @@ TEST(RingBuffer, FullAfterWrapThenDrains) {
         ASSERT_TRUE(rb.try_pop(x));
         EXPECT_EQ(x, 100 + i);
     }
+}
+
+TEST(RingBufferConcurrent, ProducerConsumerPreservesOrder) {
+#ifdef SPSC_UNDER_TSAN
+    constexpr std::uint64_t kCount = 1'000'000;   // TSan ~10x yavaşlatır
+#else
+    constexpr std::uint64_t kCount = 10'000'000;
+#endif
+    RingBuffer<std::uint64_t, 1024> rb;
+
+    std::thread producer([&] {
+        for (std::uint64_t i = 0; i < kCount; ++i) {
+            while (!rb.try_push(i)) {
+                std::this_thread::yield();   // dolu: tüketiciye fırsat ver
+            }
+        }
+    });
+
+    // gtest assert'lerini yan thread'de çağırmak yerine
+    // sonucu kaydedip ana thread'de kontrol ediyoruz.
+    std::uint64_t received = 0;
+    std::uint64_t first_bad_index = kCount;   // kCount = hata yok
+    std::uint64_t first_bad_value = 0;
+
+    std::thread consumer([&] {
+        std::uint64_t value;
+        while (received < kCount) {
+            if (rb.try_pop(value)) {
+                if (value != received && first_bad_index == kCount) {
+                    first_bad_index = received;
+                    first_bad_value = value;
+                }
+                ++received;
+            } else {
+                std::this_thread::yield();   // boş
+            }
+        }
+    });
+
+    producer.join();
+    consumer.join();
+
+    EXPECT_EQ(received, kCount);
+    EXPECT_EQ(first_bad_index, kCount)
+        << "Sıra bozuldu: " << first_bad_index << ". elemanda "
+        << first_bad_index << " beklenirken " << first_bad_value << " geldi";
+    EXPECT_TRUE(rb.empty());
 }

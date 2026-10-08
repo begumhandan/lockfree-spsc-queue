@@ -1,5 +1,14 @@
 cmake_minimum_required(VERSION 3.16)
 project(spsc_ringbuf LANGUAGES CXX)
+option(SPSC_TSAN "Build with ThreadSanitizer" OFF)
+if(SPSC_TSAN)
+  add_compile_options(-fsanitize=thread -g -O1)
+  add_link_options(-fsanitize=thread)
+  add_compile_definitions(SPSC_UNDER_TSAN)
+endif()
+
+find_package(Threads REQUIRED)
+
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -22,7 +31,7 @@ FetchContent_MakeAvailable(googletest)
 
 enable_testing()
 add_executable(test_ring_buffer tests/test_ring_buffer.cpp)
-target_link_libraries(test_ring_buffer PRIVATE spsc GTest::gtest_main)
+target_link_libraries(test_ring_buffer PRIVATE spsc GTest::gtest_main Threads::Threads)
 target_compile_options(test_ring_buffer PRIVATE
   $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic>)
 
