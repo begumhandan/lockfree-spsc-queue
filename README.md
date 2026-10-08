@@ -93,6 +93,30 @@ two hyperthreads of one P-core share L1/L2 (fastest), while a P-core/E-core
 pair goes through a slower cache level. `head` and `tail` currently share a
 cache line (false sharing). Separating them is the next optimization.
 
+## Demo: 1 kHz IMU pipeline
+
+`examples/imu_demo.cpp` simulates the classic flight-software pattern: a sensor
+thread produces an IMU sample every 1 ms and **never blocks** (if the queue is
+full, the sample is dropped and counted), while a logger thread drains the
+queue at its own pace and prints per-second statistics.
+
+```
+[ 1 s] 1000 samples ( 999.8 Hz) | mean az =  9.811 m/s² | latency avg/max =  150.1 /   667.9 µs | lost: 0
+[ 2 s] 1000 samples ( 999.8 Hz) | mean az =  9.811 m/s² | latency avg/max =  167.7 /  5457.6 µs | lost: 0
+[ 3 s] 1000 samples ( 999.7 Hz) | mean az =  9.809 m/s² | latency avg/max =  150.9 /   646.2 µs | lost: 0
+[ 4 s] 1000 samples ( 999.9 Hz) | mean az =  9.809 m/s² | latency avg/max =  148.7 /   749.2 µs | lost: 0
+```
+
+- Average latency is dominated by the logger's polling interval, not the queue.
+- The 5.4 ms spike in second 2 is the OS preempting the logger thread. The
+  256-slot buffer (~256 ms at 1 kHz) absorbed it with **zero lost samples**.
+- Shrinking the buffer to 8 slots and slowing the logger to 20 ms makes samples
+  drop, while the sensor loop keeps running at exactly 1 kHz.
+
+```bash
+./build-release/imu_demo
+```
+
 
 ## Testing
 
@@ -132,7 +156,7 @@ ctest --test-dir build-tsan --output-on-failure
 - [x] Atomic indices with acquire/release ordering
 - [x] Two-thread stress test under ThreadSanitizer
 - [x] Benchmark vs. `std::mutex` + `std::queue`
-- [ ] 1 kHz IMU producer/consumer demo
+- [x] 1 kHz IMU producer/consumer demo
 - [ ] CI: GCC + Clang, TSan job
 
 ## Limitations (by design)
