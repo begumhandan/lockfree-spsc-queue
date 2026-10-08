@@ -12,16 +12,16 @@ using Clock = std::chrono::steady_clock;
 using namespace std::chrono_literals;
 
 struct ImuSample {
-    std::uint64_t seq = 0;   // sıra numarası: kayıp tespiti için
-    Clock::time_point t{};   // üretildiği an: gecikme ölçümü için
-    float ax = 0, ay = 0, az = 0;  // ivme (m/s²)
-    float gx = 0, gy = 0, gz = 0;  // açısal hız (rad/s)
+    std::uint64_t seq = 0;          // sequence number: used to detect lost samples
+    Clock::time_point t{};          // creation time: used to measure latency
+    float ax = 0, ay = 0, az = 0;   // acceleration (m/s²)
+    float gx = 0, gy = 0, gz = 0;   // angular rate (rad/s)
 };
 
-// 256 slot = 1 kHz'de ~256 ms'lik tampon
+// 256 slots = ~256 ms of buffering at 1 kHz
 using ImuQueue = spsc::RingBuffer<ImuSample, 256>;
 
-// Sensör thread'i: 1 kHz'de örnek üretir, ASLA bloklanmaz.
+// Sensor thread: produces samples at 1 kHz and NEVER blocks.
 void sensor_thread(ImuQueue& q, const std::atomic<bool>& running,
                    std::atomic<std::uint64_t>& dropped) {
     std::mt19937 rng(42);
@@ -32,7 +32,7 @@ void sensor_thread(ImuQueue& q, const std::atomic<bool>& running,
     std::uint64_t seq = 0;
 
     while (running.load(std::memory_order_relaxed)) {
-        next += kPeriod;                       // birikmeyen zamanlama
+        next += kPeriod;                       // absolute deadline: no drift
         std::this_thread::sleep_until(next);
 
         const float t = static_cast<float>(seq) * 0.001f;
@@ -41,18 +41,18 @@ void sensor_thread(ImuQueue& q, const std::atomic<bool>& running,
         s.t = Clock::now();
         s.ax = noise(rng);
         s.ay = noise(rng);
-        s.az = 9.81f + noise(rng);             // yerçekimi + gürültü
-        s.gx = 0.10f * std::sin(t);            // hafif salınım
+        s.az = 9.81f + noise(rng);             // gravity + noise
+        s.gx = 0.10f * std::sin(t);            // gentle oscillation
         s.gy = 0.05f * std::cos(t);
         s.gz = noise(rng) * 0.1f;
 
         if (!q.try_push(s)) {
-            dropped.fetch_add(1, std::memory_order_relaxed);  // dolu: düşür
+            dropped.fetch_add(1, std::memory_order_relaxed);  // full: drop it
         }
     }
 }
 
-// Kayıt thread'i: örnekleri toplar, saniyede bir özet basar.
+// Logger thread: drains the queue and prints a summary once per second.
 void logger_thread(ImuQueue& q, const std::atomic<bool>& running) {
     ImuSample s;
     std::uint64_t count = 0, gaps = 0, expected_seq = 0;
@@ -68,7 +68,7 @@ void logger_thread(ImuQueue& q, const std::atomic<bool>& running) {
             if (lat_us > max_lat_us) max_lat_us = lat_us;
             sum_az += s.az;
 
-            if (s.seq != expected_seq) gaps += s.seq - expected_seq;  // atlanan örnek
+            if (s.seq != expected_seq) gaps += s.seq - expected_seq;  // skipped samples
             expected_seq = s.seq + 1;
             ++count;
         }
@@ -76,8 +76,8 @@ void logger_thread(ImuQueue& q, const std::atomic<bool>& running) {
         const auto now = Clock::now();
         if (now - window_start >= 1s) {
             const double secs = std::chrono::duration<double>(now - window_start).count();
-            std::printf("[%2d s] %4llu örnek (%6.1f Hz) | ort. az = %6.3f m/s² | "
-                        "gecikme ort/max = %6.1f / %7.1f µs | kayıp: %llu\n",
+            std::printf("[%2d s] %4llu samples (%6.1f Hz) | mean az = %6.3f m/s² | "
+                        "latency avg/max = %6.1f / %7.1f µs | lost: %llu\n",
                         ++second, static_cast<unsigned long long>(count), count / secs,
                         count ? sum_az / count : 0.0,
                         count ? sum_lat_us / count : 0.0, max_lat_us,
@@ -87,7 +87,7 @@ void logger_thread(ImuQueue& q, const std::atomic<bool>& running) {
             window_start = now;
         }
 
-        std::this_thread::sleep_for(200us);  // yoklama aralığı
+        std::this_thread::sleep_for(200us);  // polling interval
     }
 }
 
@@ -96,7 +96,7 @@ int main() {
     std::atomic<bool> running{true};
     std::atomic<std::uint64_t> dropped{0};
 
-    std::printf("IMU demo: 1 kHz sensör → SPSC ring buffer (256) → kayıt thread'i, 5 sn\n\n");
+    std::printf("IMU demo: 1 kHz sensor -> SPSC ring buffer (256) -> logger thread, 5 s\n\n");
 
     std::thread logger(logger_thread, std::ref(q), std::cref(running));
     std::thread sensor(sensor_thread, std::ref(q), std::cref(running), std::ref(dropped));
@@ -107,6 +107,6 @@ int main() {
     sensor.join();
     logger.join();
 
-    std::printf("\nToplam düşürülen örnek (tampon dolu): %llu\n",
+    std::printf("\nTotal dropped samples (queue full): %llu\n",
                 static_cast<unsigned long long>(dropped.load()));
 }
