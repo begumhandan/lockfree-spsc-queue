@@ -1,10 +1,11 @@
 # lockfree-spsc-queue
 
+[![CI](https://github.com/begumhandan/lockfree-spsc-queue/actions/workflows/ci.yml/badge.svg)](https://github.com/begumhandan/lockfree-spsc-queue/actions/workflows/ci.yml)
+
 A header-only, lock-free **single-producer / single-consumer (SPSC) ring buffer** in C++17,
 benchmarked against a `std::mutex` + `std::queue` baseline.
 
-> 🚧 **Work in progress.** The concurrent core is implemented and verified under
-> ThreadSanitizer; benchmarks are next. See [Roadmap](#roadmap).
+**Highlights:** ~9.4× the throughput of a mutex-based queue · verified under ThreadSanitizer · CI on GCC & Clang · 1 kHz sensor demo with zero dropped samples
 
 ## Why?
 
@@ -157,7 +158,13 @@ ctest --test-dir build-tsan --output-on-failure
 - [x] Two-thread stress test under ThreadSanitizer
 - [x] Benchmark vs. `std::mutex` + `std::queue`
 - [x] 1 kHz IMU producer/consumer demo
-- [ ] CI: GCC + Clang, TSan job
+- [x] CI: GCC + Clang, TSan job
+
+### Next
+- [ ] Separate `head`/`tail` onto different cache lines (`alignas(64)`) and measure false-sharing impact
+- [ ] Cache the other side's index locally to reduce cross-core traffic
+- [ ] Batch `push_n` / `pop_n`
+- [ ] Latency histogram (p50/p99)
 
 ## Limitations (by design)
 
